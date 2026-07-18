@@ -1,5 +1,3 @@
-# EtherNet/IP Adapter (Device) Demo — C implementation
-
 A from-scratch, educational implementation of an **EtherNet/IP** adapter
 (the "server"/"device" side of the protocol) in portable C11 for POSIX
 systems. It listens on TCP 44818 for explicit messaging and UDP 2222 for
