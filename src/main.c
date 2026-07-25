@@ -3,6 +3,7 @@
 #include "enip/cip_tcpip_interface.h"
 #include "enip/cip_assembly.h"
 #include "enip/cip_connection_manager.h"
+#include "enip/cip_safety.h"
 #include "enip/server_tcp.h"
 #include "enip/server_udp.h"
 
@@ -31,12 +32,16 @@ int main(void)
     cip_tcpip_interface_register();
     cip_assembly_register();
     cip_connection_manager_register();
+    cip_safety_register();
 
     server_tcp_init();
     server_udp_init();
 
     printf("Assembly instances: output(O->T)=%d input(T->O)=%d config=%d\n",
            ASM_INSTANCE_OUTPUT, ASM_INSTANCE_INPUT, ASM_INSTANCE_CONFIG);
+    printf("Safety I/O instances: output(O->T)=%d input(T->O)=%d "
+           "(open via Connection Manager instance 2)\n",
+           SAFETY_INSTANCE_OUTPUT, SAFETY_INSTANCE_INPUT);
 
     uint32_t counter = 0;
     while (g_running)
