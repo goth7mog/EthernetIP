@@ -20,6 +20,8 @@
 #define CIP_CLASS_CONNECTION_MANAGER 0x0006u
 #define CIP_CLASS_TCPIP_INTERFACE 0x00F5u
 #define CIP_CLASS_ETHERNET_LINK 0x00F6u
+#define CIP_CLASS_SAFETY_SUPERVISOR 0x0039u /* real ODVA Vol 5 class id, reused for realism */
+#define CIP_CLASS_SAFETY_VALIDATOR 0x003Au  /* see cip_safety.h for how far this demo goes  */
 
 /* ------------------------------------------------------------------------
  * CIP common services (ODVA Vol 1, Table 4A-4.4) - apply to (almost) any class
