@@ -29,7 +29,7 @@ static uint32_t random_u32(void)
 /* Forward Open (0x54) and Large Forward Open (0x5B) share the same field
  * layout except for the width of the two "Network Connection Parameters"
  * fields (16-bit vs 32-bit) - see ODVA Vol1 Table 3-5.11/3-5.21. */
-static bool forward_open(bool large, buf_reader_t *req, buf_writer_t *resp,
+static bool forward_open(bool large, bool is_safety, buf_reader_t *req, buf_writer_t *resp,
                          uint8_t *general_status, uint16_t *ext_status)
 {
     uint8_t priority_ticks, timeout_ticks, timeout_mult, reserved[3];
@@ -98,7 +98,6 @@ static bool forward_open(bool large, buf_reader_t *req, buf_writer_t *resp,
 
     (void)priority_ticks;
     (void)timeout_ticks;
-    (void)timeout_mult;
     (void)transport;
 
     /* Connection size is the low 9 bits (regular FO) or low 16 bits (large
@@ -116,6 +115,7 @@ static bool forward_open(bool large, buf_reader_t *req, buf_writer_t *resp,
 
     memset(&g_conn, 0, sizeof g_conn);
     g_conn.active = true;
+    g_conn.is_safety = is_safety;
     g_conn.addr_learned = false;
     g_conn.o_to_t_conn_id = random_u32() | 1u; /* target-generated, never 0 */
     g_conn.t_to_o_conn_id = t_to_o_conn_id;    /* originator-generated, echoed as-is */
@@ -126,6 +126,7 @@ static bool forward_open(bool large, buf_reader_t *req, buf_writer_t *resp,
     g_conn.t_to_o_rpi_us = t_to_o_rpi;
     g_conn.o_to_t_size = o_to_t_size;
     g_conn.t_to_o_size = t_to_o_size;
+    g_conn.timeout_multiplier = timeout_mult;
     g_conn.t_to_o_seq = 0;
     g_conn.t_to_o_seq_count = 0;
 
@@ -231,15 +232,20 @@ static bool conn_mgr_service(const cip_epath_t *path, uint8_t service,
                              uint8_t *general_status, uint16_t *ext_status)
 {
     uint32_t instance_id = path->has_instance ? path->instance_id : 0;
-    if (instance_id > 1)
+    if (instance_id > 2)
         return false;
+
+    /* Instance 2 is this demo's stand-in for a CIP Safety Forward Open -
+     * see the header comment for why we key off the instance instead of
+     * parsing the real Safety Segment in the connection path. */
+    bool is_safety = (instance_id == 2);
 
     switch (service)
     {
     case CIP_SVC_FORWARD_OPEN:
-        return forward_open(false, req_data, resp_data, general_status, ext_status);
+        return forward_open(false, is_safety, req_data, resp_data, general_status, ext_status);
     case CIP_SVC_LARGE_FORWARD_OPEN:
-        return forward_open(true, req_data, resp_data, general_status, ext_status);
+        return forward_open(true, is_safety, req_data, resp_data, general_status, ext_status);
     case CIP_SVC_FORWARD_CLOSE:
         return forward_close(req_data, resp_data, general_status, ext_status);
     default:
