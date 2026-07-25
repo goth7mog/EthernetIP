@@ -34,6 +34,7 @@ src/
   cip_tcpip_interface.c    CIP TCP/IP Interface Object (class 0xF5)
   cip_assembly.c           CIP Assembly Object       (class 0x04) - I/O data
   cip_connection_manager.c CIP Connection Manager    (class 0x06) - Forward Open/Close
+  cip_safety.c             Simplified CIP Safety     (classes 0x39/0x3A) - see below
   server_tcp.c             Explicit messaging: accept/read/dispatch loop
   server_udp.c             Implicit messaging: cyclic I/O send/receive loop
   main.c                   Wires everything together, single select() event loop
@@ -133,6 +134,46 @@ asking:
    that free-runs as a counter here).
 3. **Forward Close** (`0x4E`) tears the connection down.
 
+### 5. CIP Safety (simplified, non-certified)
+
+Layered on top of the same Forward Open / cyclic I/O machinery is a
+small, **educational, non-certified** illustration of CIP Safety
+(`cip_safety.c`) - functional-safety I/O designed so that any corruption,
+loss, duplication, or delay of a safety message is always *detected*,
+forcing outputs to a safe (de-energized) state the instant something looks
+wrong. This demo is NOT conformant/certifiable (see the big comment at the
+top of `enip/cip_safety.h` for the full list of what real CIP Safety does
+differently), but it faithfully illustrates the core ideas:
+
+- **Requesting a safety connection**: a client sends Forward Open to
+  Connection Manager **instance 2** instead of instance 1 - our own
+  simplified stand-in for the real "Safety Segment" a compliant client
+  would embed in the connection path.
+- **Duplicated + complemented data**: every safety PDU carries the data
+  bytes *and* their bitwise complement, so a stuck or flipped bit becomes
+  detectable (`cip_safety_encode_pdu`/`cip_safety_decode_pdu`).
+- **Integrity check**: a CRC-8 over the mode + data bytes (not the real
+  CRC-S3/S5 polynomials CIP Safety specifies, just "an integrity check
+  exists").
+- **Bounded timeout**: `server_udp.c` tracks the time since the last
+  *valid* safety packet and forces a fault if it exceeds a window derived
+  from the connection's RPI and Timeout Multiplier.
+- **Latched faults**: once faulted, the safety output stays forced to zero
+  - even if the very next packet is perfectly valid - until an operator
+  explicitly calls the Safety Supervisor's `Reset` (`0x05`) service,
+  mirroring the real requirement that safety faults need acknowledgment,
+  not just "the next good message clears it".
+- **Diagnostics via CIP objects**: `Safety Supervisor` (class `0x39`)
+  exposes overall device status (Idle/Executing/Faulted), and `Safety
+  Validator` (class `0x3A`) exposes per-fault-type counters - both
+  queryable with ordinary `Get_Attribute_Single` over SendRRData, just
+  like Identity or TCP/IP Interface.
+
+`tests/test_client.py` exercises the whole lifecycle: open a safety
+connection, exchange valid data, inject a corrupted packet, observe the
+forced safe state and incrementing fault counters, `Reset`, and confirm
+recovery.
+
 ### Known simplifications (by design, for clarity)
 
 - Only one Class 1 (cyclic I/O) connection at a time; no multicast.
@@ -144,6 +185,10 @@ asking:
 - TCP/IP Interface Object reports placeholder (0.0.0.0) network config.
 - No CIP Security / TLS — matches the base EtherNet/IP spec, which has no
   built-in authentication either.
+- CIP Safety is a non-certified, simplified illustration only - see
+  `enip/cip_safety.h` for the full list of what it does not attempt to
+  replicate (real CRC-S3/S5, Safety Segment parsing, Time Coordination
+  messages, dual/diverse channels, certification).
 
 These are called out with comments at each call site in the source, so
 they're easy to find and extend later (e.g. multiple connections, real
