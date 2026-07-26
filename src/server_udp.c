@@ -108,18 +108,28 @@ void server_udp_handle_fds(fd_set *readfds)
     {
         uint8_t mode;
         uint8_t data[SAFETY_APP_SIZE];
-        if (cip_safety_decode_pdu(buf_reader_ptr(&data_r), data_len, SAFETY_APP_SIZE, &mode, data))
+        cip_safety_check_result_t result =
+            cip_safety_decode_pdu(buf_reader_ptr(&data_r), data_len, SAFETY_APP_SIZE, &mode, data);
+        switch (result)
         {
+        case CIP_SAFETY_CHECK_OK:
             (void)mode;
             cip_safety_write_output(data, sizeof data);
             g_safety_last_rx_us = monotonic_us(); /* valid safety data arrived - reset the watchdog */
-        }
-        else
-        {
+            break;
+        case CIP_SAFETY_CHECK_CHANNEL_MISMATCH:
+            /* Channel A (CRC/complement) passed but Channel B (the
+             * independently-coded check) disagreed - exactly the scenario
+             * a second, diverse check exists to catch. Don't trust it. */
+            cip_safety_note_channel_mismatch_fault();
+            break;
+        case CIP_SAFETY_CHECK_CHANNEL_A_FAULT:
+        default:
             /* Complement mismatch or bad CRC - could be a bit flip, a
              * non-safety sender, or an attacker; either way, don't trust
              * it: force the safe state instead of applying anything. */
             cip_safety_note_validation_fault();
+            break;
         }
     }
     else
