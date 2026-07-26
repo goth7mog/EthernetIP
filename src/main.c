@@ -33,6 +33,7 @@ int main(void)
     cip_assembly_register();
     cip_connection_manager_register();
     cip_safety_register();
+    cip_safety_self_test(); /* prove the safety checking logic works before accepting connections */
 
     server_tcp_init();
     server_udp_init();
@@ -74,6 +75,15 @@ int main(void)
             (uint8_t)(counter & 0xFF), (uint8_t)((counter >> 8) & 0xFF),
             (uint8_t)((counter >> 16) & 0xFF), (uint8_t)((counter >> 24) & 0xFF)};
         cip_assembly_set_input(demo_input, sizeof demo_input);
+
+        /* Periodic self-test ("proof test"): every ~500 loop iterations at
+         * a 10ms poll interval, roughly every 5 seconds - mirrors a real
+         * safety device re-checking that its own diagnostics still work,
+         * not just checking incoming data. */
+        if (counter % 500 == 0)
+        {
+            cip_safety_self_test();
+        }
 
         server_udp_tick();
     }
