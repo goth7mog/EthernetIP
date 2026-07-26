@@ -152,9 +152,22 @@ differently), but it faithfully illustrates the core ideas:
 - **Duplicated + complemented data**: every safety PDU carries the data
   bytes *and* their bitwise complement, so a stuck or flipped bit becomes
   detectable (`cip_safety_encode_pdu`/`cip_safety_decode_pdu`).
-- **Integrity check**: a CRC-8 over the mode + data bytes (not the real
-  CRC-S3/S5 polynomials CIP Safety specifies, just "an integrity check
-  exists").
+- **Two independently-implemented integrity checks that must both agree**
+  ("Channel A" = CRC-8, "Channel B" = a structurally different additive
+  checksum + its own separately-coded complement re-derivation) - a
+  software-only simulation of what real dual-channel hardware achieves by
+  running on genuinely separate silicon: a bug or corruption pattern
+  invisible to one algorithm is very unlikely to also be invisible to a
+  differently-implemented one. Channel A failing is a `CRC/complement
+  fault`; Channel A passing while Channel B disagrees is a separate
+  `channel mismatch fault` - exactly the scenario a second, diverse check
+  exists to catch.
+- **Self-test ("proof test")**: `cip_safety_self_test()` feeds known-good
+  and known-bad vectors through both channels and confirms each behaves as
+  expected, run once at startup and periodically thereafter (`main.c`) and
+  again as part of `Reset` recovery - this exists to catch the case where
+  the *checking logic itself* has silently broken, not just to check
+  incoming data.
 - **Bounded timeout**: `server_udp.c` tracks the time since the last
   *valid* safety packet and forces a fault if it exceeds a window derived
   from the connection's RPI and Timeout Multiplier.
@@ -164,15 +177,26 @@ differently), but it faithfully illustrates the core ideas:
   mirroring the real requirement that safety faults need acknowledgment,
   not just "the next good message clears it".
 - **Diagnostics via CIP objects**: `Safety Supervisor` (class `0x39`)
-  exposes overall device status (Idle/Executing/Faulted), and `Safety
-  Validator` (class `0x3A`) exposes per-fault-type counters - both
+  exposes overall device status (Idle/Executing/Faulted) and self-test
+  status, and `Safety Validator` (class `0x3A`) exposes per-fault-type
+  counters (CRC/complement, timeout, channel mismatch, self-test) - all
   queryable with ordinary `Get_Attribute_Single` over SendRRData, just
   like Identity or TCP/IP Interface.
 
 `tests/test_client.py` exercises the whole lifecycle: open a safety
-connection, exchange valid data, inject a corrupted packet, observe the
-forced safe state and incrementing fault counters, `Reset`, and confirm
-recovery.
+connection, exchange valid data, inject a Channel A fault (broken
+complement) and separately a Channel B mismatch (broken checksum only),
+observe the forced safe state and each fault type's counter incrementing,
+`Reset`, and confirm recovery + a passing self-test.
+
+Even with this addition, **this remains a single-process, non-certified
+simulation** - both "channels" run as ordinary function calls on the same
+CPU core, sharing the same memory, compiler, and OS. It illustrates the
+*concept* of redundancy/diversity/diagnostics well enough to reason about,
+but does not (and cannot) substitute for genuinely independent hardware
+execution channels, which is what real functional-safety certification
+actually requires - see the header comment in `enip/cip_safety.h` for the
+full caveat.
 
 ### Known simplifications (by design, for clarity)
 
