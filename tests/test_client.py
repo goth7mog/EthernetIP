@@ -43,7 +43,7 @@ CIP_CLASS_SAFETY_VALIDATOR = 0x3A
 
 
 def crc8(data: bytes) -> int:
-    """Must match the simple (non-certified) CRC-8 in src/cip_safety.c."""
+    """Must match Channel A's CRC-8 in src/cip_safety.c."""
     crc = 0xFF
     for byte in data:
         crc ^= byte
@@ -52,22 +52,47 @@ def crc8(data: bytes) -> int:
     return crc
 
 
+def channel_b_checksum(data: bytes) -> int:
+    """Must match Channel B's (deliberately different) checksum in src/cip_safety.c."""
+    total = 0
+    for byte in data:
+        total = (total + byte + 1) & 0xFFFF
+        total = (total & 0xFF) + (total >> 8)
+    return (~total) & 0xFF
+
+
+CIP_SAFETY_CHECK_OK = 0
+CIP_SAFETY_CHECK_CHANNEL_A_FAULT = 1
+CIP_SAFETY_CHECK_CHANNEL_MISMATCH = 2
+
+
 def encode_safety_pdu(mode: int, data: bytes) -> bytes:
     complement = bytes((~b) & 0xFF for b in data)
     body = bytes([mode]) + data
-    return body + complement + bytes([crc8(body)])
+    return body + complement + bytes([crc8(body), channel_b_checksum(body)])
 
 
 def decode_safety_pdu(pdu: bytes, data_len: int):
-    """Returns (mode, data) if complement+CRC check out, else None."""
+    """Returns (result, mode, data), mirroring cip_safety_check_result_t -
+    mode/data are None unless result == CIP_SAFETY_CHECK_OK."""
     data = pdu[1:1 + data_len]
     complement = pdu[1 + data_len:1 + 2 * data_len]
     crc = pdu[1 + 2 * data_len]
+    checksum_b = pdu[2 + 2 * data_len]
+
+    # Channel A: complement XOR check + CRC-8.
     if any((a ^ b) != 0xFF for a, b in zip(data, complement)):
-        return None
+        return CIP_SAFETY_CHECK_CHANNEL_A_FAULT, None, None
     if crc8(pdu[0:1 + data_len]) != crc:
-        return None
-    return pdu[0], data
+        return CIP_SAFETY_CHECK_CHANNEL_A_FAULT, None, None
+
+    # Channel B: independently re-derived data + a differently-computed checksum.
+    if any(((~b) & 0xFF) != a for a, b in zip(data, complement)):
+        return CIP_SAFETY_CHECK_CHANNEL_MISMATCH, None, None
+    if channel_b_checksum(pdu[0:1 + data_len]) != checksum_b:
+        return CIP_SAFETY_CHECK_CHANNEL_MISMATCH, None, None
+
+    return CIP_SAFETY_CHECK_OK, pdu[0], data
 
 
 def build_encap(command, session_handle, payload, context=b"pytest\0\0"):
@@ -300,18 +325,19 @@ def main():
     # Valid safety data: request "enable" (bit0=1) -> device should report energized=1.
     good_pdu = encode_safety_pdu(0x01, bytes([0x01]))
     resp_pdu = send_safety_and_recv(good_pdu, 1)
-    mode, data = decode_safety_pdu(resp_pdu, 1)
+    result, mode, data = decode_safety_pdu(resp_pdu, 1)
+    assert result == CIP_SAFETY_CHECK_OK, f"expected valid T->O safety PDU, got result={result}"
     assert data[0] & 0x01, f"expected device energized after valid safety data, got {data!r}"
     print(f"Safety I/O (valid): sent enable=1 -> device status energized={data[0] & 1}")
 
-    # Corrupted safety data (complement deliberately broken) -> device must
-    # ignore it and force a safe (de-energized) state, and latch a fault.
+    # Corrupted safety data (complement deliberately broken) -> Channel A
+    # must catch it; device must ignore it and force a safe state.
     bad_pdu = bytearray(encode_safety_pdu(0x01, bytes([0x01])))
-    bad_pdu[2] ^= 0xFF  # wreck the complement byte so decode fails
+    bad_pdu[2] ^= 0xFF  # wreck the complement byte so Channel A rejects it
     resp_pdu = send_safety_and_recv(bytes(bad_pdu), 2)
-    mode, data = decode_safety_pdu(resp_pdu, 1)
+    result, mode, data = decode_safety_pdu(resp_pdu, 1)
     assert data[0] & 0x01 == 0, f"expected safe (de-energized) state after corrupt data, got {data!r}"
-    print(f"Safety I/O (corrupted): device forced to safe state, energized={data[0] & 1}")
+    print(f"Safety I/O (Channel A fault): device forced to safe state, energized={data[0] & 1}")
 
     status = get_attr(CIP_CLASS_SAFETY_SUPERVISOR, 1, 1)
     assert status[0] == 3, f"expected Safety Supervisor status=Faulted(3), got {status[0]}"
@@ -319,18 +345,42 @@ def main():
     assert crc_faults >= 1, "expected at least one CRC/complement fault to be counted"
     print(f"Safety Supervisor status=Faulted, Safety Validator crc_faults={crc_faults}")
 
-    # Even valid data is now rejected until the fault is explicitly reset.
-    resp_pdu = send_safety_and_recv(encode_safety_pdu(0x01, bytes([0x01])), 3)
-    mode, data = decode_safety_pdu(resp_pdu, 1)
-    assert data[0] & 0x01 == 0, "safety output should stay latched safe until Reset"
-
+    # Recover via Reset before exercising the second, independent channel -
+    # only one connection slot and one latch, so test one fault at a time.
     words, path = epath_class_instance_attr(CIP_CLASS_SAFETY_SUPERVISOR, 1)
     gs, _ = send_rr_data(tcp, session_handle, cip_request(CIP_SVC_RESET, words, path))
     assert gs == 0, f"Safety Reset failed, general_status={gs:#x}"
+    self_test_status = get_attr(CIP_CLASS_SAFETY_SUPERVISOR, 1, 3)[0]
+    assert self_test_status == 1, f"expected self-test status=Pass(1) after Reset, got {self_test_status}"
+    print(f"Safety Supervisor Reset OK, self-test status={self_test_status} (Pass)")
+
+    # Channel-mismatch fault: leave the complement/CRC (Channel A) untouched
+    # but wreck ONLY the Channel B checksum byte - Channel A alone would
+    # accept this, which is exactly why the independent Channel B check
+    # exists: it must still catch it and force the safe state.
+    mismatch_pdu = bytearray(encode_safety_pdu(0x01, bytes([0x01])))
+    mismatch_pdu[-1] ^= 0xFF  # wreck only the trailing Channel B checksum byte
+    resp_pdu = send_safety_and_recv(bytes(mismatch_pdu), 3)
+    result, mode, data = decode_safety_pdu(resp_pdu, 1)
+    assert data[0] & 0x01 == 0, f"expected safe state after a Channel B mismatch, got {data!r}"
+    mismatch_faults = struct.unpack("<I", get_attr(CIP_CLASS_SAFETY_VALIDATOR, 1, 4))[0]
+    assert mismatch_faults >= 1, "expected at least one channel-mismatch fault to be counted"
+    print(f"Safety I/O (Channel B mismatch): device forced to safe state, "
+          f"channel_mismatch_faults={mismatch_faults}")
+
+    # Even valid data is now rejected until the fault is explicitly reset.
+    resp_pdu = send_safety_and_recv(encode_safety_pdu(0x01, bytes([0x01])), 4)
+    result, mode, data = decode_safety_pdu(resp_pdu, 1)
+    assert data[0] & 0x01 == 0, "safety output should stay latched safe until Reset"
+
+    gs, _ = send_rr_data(tcp, session_handle, cip_request(CIP_SVC_RESET, words, path))
+    assert gs == 0, f"Safety Reset failed, general_status={gs:#x}"
+    self_test_faults = struct.unpack("<I", get_attr(CIP_CLASS_SAFETY_VALIDATOR, 1, 5))[0]
+    assert self_test_faults == 0, "self-test should never fail in this demo's own known-good code"
     print("Safety Supervisor Reset OK")
 
-    resp_pdu = send_safety_and_recv(encode_safety_pdu(0x01, bytes([0x01])), 4)
-    mode, data = decode_safety_pdu(resp_pdu, 1)
+    resp_pdu = send_safety_and_recv(encode_safety_pdu(0x01, bytes([0x01])), 5)
+    result, mode, data = decode_safety_pdu(resp_pdu, 1)
     assert data[0] & 0x01, "expected device energized again after Reset + valid data"
     print("Safety I/O (post-reset): device re-energized -> fault recovery confirmed")
 
