@@ -11,9 +11,9 @@ a full Forward Open → cyclic I/O → Forward Close connection lifecycle.
 EtherNet/IP is really two layers stacked together:
 
 ```
- Application  →  CIP (Common Industrial Protocol): object model, services, status codes
- Transport    →  Encapsulation protocol: frames CIP requests over TCP/UDP
- Network      →  Ordinary IP (TCP port 44818, UDP ports 44818 & 2222)
+Application  →  CIP (Common Industrial Protocol): object model, services, status codes
+Transport    →  Encapsulation protocol: frames CIP requests over TCP/UDP
+Network      →  Ordinary IP (TCP port 44818, UDP ports 44818 & 2222)
 ```
 
 Nothing here is EtherNet/IP-specific about "the wire" itself — it's plain
@@ -23,22 +23,22 @@ header) and the object-oriented request format (CIP) layered on top.
 ## Project layout
 
 ```
-include/enip/     Public headers, one per subsystem
+include/enip/          Public headers, one per subsystem
 src/
-  buf.c                    Bounds-checked little-/big-endian buffer read/write
-  cpf.c                    Common Packet Format (the "item list" used everywhere)
-  encap.c                  24-byte encapsulation header encode/decode
-  cip_router.c             EPATH decoding + Message Router style class dispatch
-  session.c                RegisterSession handle table
-  cip_identity.c           CIP Identity Object       (class 0x01)
-  cip_tcpip_interface.c    CIP TCP/IP Interface Object (class 0xF5)
-  cip_assembly.c           CIP Assembly Object       (class 0x04) - I/O data
-  cip_connection_manager.c CIP Connection Manager    (class 0x06) - Forward Open/Close
-  cip_safety.c             Simplified CIP Safety     (classes 0x39/0x3A) - see below
-  server_tcp.c             Explicit messaging: accept/read/dispatch loop
-  server_udp.c             Implicit messaging: cyclic I/O send/receive loop
-  main.c                   Wires everything together, single select() event loop
-tests/test_client.py       Stdlib-only Python client exercising the full protocol
+  buf.c                     Bounds-checked little-/big-endian buffer read/write
+  cpf.c                     Common Packet Format (the "item list" used everywhere)
+  encap.c                   24-byte encapsulation header encode/decode
+  cip_router.c              EPATH decoding + Message Router style class dispatch
+  session.c                 RegisterSession handle table
+  cip_identity.c            CIP Identity Object (class 0x01)
+  cip_tcpip_interface.c     CIP TCP/IP Interface Object (class 0xF5)
+  cip_assembly.c            CIP Assembly Object (class 0x04) - I/O data
+  cip_connection_manager.c  CIP Connection Manager (class 0x06) - Forward Open/Close
+  cip_safety.c              Simplified CIP Safety (classes 0x39/0x3A) - see below
+  server_tcp.c              Explicit messaging: accept/read/dispatch loop
+  server_udp.c              Implicit messaging: cyclic I/O send/receive loop
+  main.c                    Wires everything together, single select() event loop
+tests/test_client.py     Stdlib-only Python client exercising the full protocol
 ```
 
 ## Building & running
